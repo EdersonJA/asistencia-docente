@@ -925,7 +925,7 @@ function toggleReopenPwd() {
 function unlock() {
   const val = document.getElementById('pwdInput').value;
   if(val === PASSWORD) {
-    loadData();
+    loadData(); // carga localStorage como base inicial
     document.getElementById('lockScreen').style.display = 'none';
     document.getElementById('app').style.display = 'block';
     if(logoDataUrl) updateHeaderLogo();
@@ -933,12 +933,7 @@ function unlock() {
     renderTable();
     startClock();
     if(isClosed) restoreClosedUI();
-    if(teachers.length > 0) {
-      showToast(`📂 Datos restaurados: ${teachers.length} docentes cargados`, 'info');
-    } else {
-      // No hay datos locales — intentar cargar desde Firebase
-      showToast('🔄 Cargando datos desde Firebase...', 'info');
-    }
+    showToast('🔄 Conectando y cargando datos...', 'info');
   } else {
     const err = document.getElementById('lockError');
     err.textContent = '❌ Contraseña incorrecta. Intenta nuevamente.';
@@ -2152,13 +2147,27 @@ function startFirebaseListeners() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // 1. DOCENTES — escuchar cambios de cualquier PC
+  // 1. DOCENTES — Firebase es la fuente de verdad
+  let teachersFirstLoad = true;
   fbDb.ref('teachers').on('value', snap => {
     if(_suppressRemoteUpdate) return;
     const data = snap.val();
-    // data puede ser null (vacío), array, u objeto
     const remote = !data ? [] : (Array.isArray(data) ? data : Object.values(data));
-    // Solo actualizar si hay diferencia real
+
+    // En la primera carga siempre aplicar Firebase (es la fuente de verdad)
+    if(teachersFirstLoad) {
+      teachersFirstLoad = false;
+      if(remote.length > 0) {
+        teachers = remote;
+        saveData();
+        updateStats();
+        renderTable();
+        showToast(`📂 ${teachers.length} docentes cargados desde Firebase`, 'success');
+      }
+      return;
+    }
+
+    // En cargas posteriores, solo actualizar si hay diferencia real
     if(JSON.stringify(remote) !== JSON.stringify(teachers)) {
       teachers = remote;
       saveData();
@@ -2168,13 +2177,13 @@ function startFirebaseListeners() {
     }
   });
 
-  // 2. ASISTENCIA DEL DÍA — escuchar registros en tiempo real
+  // 2. ASISTENCIA DEL DÍA — Firebase es la fuente de verdad
+  let attendanceFirstLoad = true;
   fbDb.ref(`asistencia/${today}`).on('value', snap => {
     if(_suppressRemoteUpdate) return;
     const data = snap.val();
     const remoteArr = data ? Object.values(data) : [];
 
-    // Convertir formato Firebase → formato local
     const remoteAttendance = remoteArr.map(r => ({
       id:   teachers.find(t => t.dni === r.dni)?.id ?? r.dni,
       name: r.nombre,
@@ -2183,6 +2192,17 @@ function startFirebaseListeners() {
       date: r.fecha || new Date().toLocaleDateString('es-PE')
     }));
 
+    // Primera carga: siempre aplicar Firebase
+    if(attendanceFirstLoad) {
+      attendanceFirstLoad = false;
+      attendance = remoteAttendance;
+      saveData();
+      updateStats();
+      renderTable();
+      return;
+    }
+
+    // Cargas posteriores: solo si hay diferencia
     if(JSON.stringify(remoteAttendance) !== JSON.stringify(attendance)) {
       attendance = remoteAttendance;
       saveData();
