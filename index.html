@@ -1432,13 +1432,21 @@ function confirmDeleteTeacher() {
   const t = teachers.find(x => x.id === pendingDeleteId);
   if(!t) return;
 
-  // Remove from teachers list
+  // Remove from local lists
   teachers   = teachers.filter(x => x.id !== pendingDeleteId);
-  // Remove attendance record if exists
   attendance = attendance.filter(a => a.id !== pendingDeleteId);
 
   saveData();
   pushTeachersToFirebase();
+
+  // Also remove attendance from Firebase
+  if(fbDb) {
+    const today = new Date().toISOString().split('T')[0];
+    const safeKey = t.dni.replace(/[.#$\[\]]/g, '_');
+    fbDb.ref(`asistencia/${today}/${safeKey}`).remove();
+  }
+
+  syncSummaryToFirebase();
   updateStats();
   renderTable();
   closeModal('deleteTeacherModal');
@@ -2148,16 +2156,15 @@ function startFirebaseListeners() {
   fbDb.ref('teachers').on('value', snap => {
     if(_suppressRemoteUpdate) return;
     const data = snap.val();
-    if(data) {
-      const remote = Array.isArray(data) ? data : Object.values(data);
-      // Solo actualizar si hay diferencia real (evitar loop)
-      if(JSON.stringify(remote) !== JSON.stringify(teachers)) {
-        teachers = remote;
-        saveData();
-        updateStats();
-        renderTable();
-        showToast('🔄 Lista de docentes actualizada desde otra PC', 'info');
-      }
+    // data puede ser null (vacío), array, u objeto
+    const remote = !data ? [] : (Array.isArray(data) ? data : Object.values(data));
+    // Solo actualizar si hay diferencia real
+    if(JSON.stringify(remote) !== JSON.stringify(teachers)) {
+      teachers = remote;
+      saveData();
+      updateStats();
+      renderTable();
+      if(remote.length > 0) showToast('🔄 Lista de docentes actualizada', 'info');
     }
   });
 
@@ -2209,10 +2216,12 @@ function startFirebaseListeners() {
 
 // ── Subir TODA la lista de docentes a Firebase ──
 function pushTeachersToFirebase() {
-  if(!fbDb || teachers.length === 0) return;
+  if(!fbDb) return;
   _suppressRemoteUpdate = true;
-  fbDb.ref('teachers').set(teachers).finally(() => {
-    setTimeout(() => _suppressRemoteUpdate = false, 800);
+  // Si no hay docentes, guardar array vacío (no null) para que Firebase lo refleje
+  const data = teachers.length > 0 ? teachers : [];
+  fbDb.ref('teachers').set(data).finally(() => {
+    setTimeout(() => _suppressRemoteUpdate = false, 2000); // 2 segundos para evitar conflicto
   });
 }
 
@@ -2230,7 +2239,7 @@ function syncAttendanceToFirebase(rec) {
     fecha:  rec.date,
     estado: 'PRESENTE',
     ts:     Date.now()
-  }).finally(() => setTimeout(() => _suppressRemoteUpdate = false, 800));
+  }).finally(() => setTimeout(() => _suppressRemoteUpdate = false, 2000));
 
   syncSummaryToFirebase();
 }
